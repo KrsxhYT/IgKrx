@@ -1,6 +1,6 @@
 [project]
 name = "igkrx"
-version = "1.2"
+version = "1.2.1"
 description = "Advanced Instagram Toolkit by Krsxh"
 readme = "README.md"
 requires-python = ">=3.8"
