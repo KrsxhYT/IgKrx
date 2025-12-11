@@ -1,0 +1,25 @@
+[project]
+name = "igkrx"
+version = "2.0.0"
+description = "Advanced Instagram Toolkit by Krsxh"
+readme = "README.md"
+requires-python = ">=3.8"
+
+authors = [
+    {name = "Krsxh"}
+]
+
+dependencies = [
+    "requests",
+    "user_agent"
+]
+
+[tool.setuptools]
+packages = ["igkrx"]
+
+[tool.setuptools.package-dir]
+igkrx = "igkrx"
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
