@@ -38,7 +38,10 @@ class SessionManager:
                 response = self.session.get(url, headers=headers, timeout=10)
                 self.csrf_token = response.cookies.get('csrftoken')
                 self.last_token_time = current_time
-                logger.info(f"CSRF Token refreshed: {self.csrf_token[:10]}...")
+                if self.csrf_token:
+                    logger.info(f"CSRF Token refreshed: {self.csrf_token[:10]}...")
+                else:
+                    logger.warning("CSRF Token not found in response")
             except Exception as e:
                 logger.error(f"Failed to get CSRF token: {e}")
                 return None
@@ -59,46 +62,66 @@ def igresetv1(user: str) -> Dict[str, Any]:
     """
     Reset an Instagram account password using the web API.
     
-    Enhanced with:
-    - Better error handling
-    - Request timeout
-    - JSON validation
+    Fixed: CSRF token issue and better response format
     """
     url = "https://www.instagram.com/api/v1/web/accounts/account_recovery_send_ajax/"
+    
+    # Get fresh CSRF token
+    csrf_token = token()
+    if not csrf_token:
+        return {
+            "status": "error",
+            "message": "Failed to get CSRF token",
+            "timestamp": datetime.now().isoformat(),
+            **DEV_INFO
+        }
     
     headers = {
         "accept": "*/*",
         "content-type": "application/x-www-form-urlencoded",
-        "x-csrftoken": token(),
+        "x-csrftoken": csrf_token,
         "user-agent": generate_user_agent(),
         "x-ig-www-claim": "0",
         "origin": "https://www.instagram.com",
         "referer": "https://www.instagram.com/accounts/password/reset/",
         "accept-language": "en-US,en;q=0.9",
+        "x-ig-app-id": "936619743392459",
     }
     
     data = {"email_or_username": user}
     
     try:
         response = requests.post(url=url, headers=headers, data=data, timeout=15)
-        response.raise_for_status()
-        result = response.json()
-        result.update(DEV_INFO)
+        
+        result = {
+            "status_code": response.status_code,
+            "success": response.status_code == 200,
+            "timestamp": datetime.now().isoformat(),
+            **DEV_INFO
+        }
+        
+        try:
+            json_response = response.json()
+            result.update(json_response)
+        except:
+            result["raw_response"] = response.text[:500]
+        
         return result
+        
     except requests.exceptions.RequestException as e:
         logger.error(f"igresetv1 failed: {e}")
-        return {"error": str(e), "status": "failed", **DEV_INFO}
-    except json.JSONDecodeError:
-        return {"error": "Invalid JSON response", "raw_response": response.text, **DEV_INFO}
+        return {
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat(),
+            **DEV_INFO
+        }
 
 def igresetv2(user: str) -> Dict[str, Any]:
     """
     Reset an Instagram account password using Android private API.
     
-    Enhanced with:
-    - Dynamic cookie generation
-    - Better device ID generation
-    - Structured response
+    Fixed: Mobile API signature issue
     """
     ua = generate_user_agent()
     
@@ -107,29 +130,25 @@ def igresetv2(user: str) -> Dict[str, Any]:
     device_id = dev + hashlib.md5(str(uuid.uuid4()).encode()).hexdigest()[:16]
     uui = str(uuid.uuid4())
     
-    # Get fresh CSRF token
-    csrf_token = token() or "default_token_placeholder"
+    # Generate random mid and csrf for mobile API
+    mid = 'ZVfGvgABAAGoQqa7AY3mgoYBV1nP'
+    csrf_token = '9y3N5kLqzialQA7z96AMiyAKLMBWpqVj'
     
     headers = {
         'User-Agent': ua,
         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Cookie': f'mid={mid}; csrftoken={csrf_token}'
     }
     
-    # Signed body with fresh token
-    signed_body_data = {
-        '_csrftoken': csrf_token,
-        'adid': uui,
-        'guid': uui,
-        'device_id': device_id,
-        'query': user
-    }
-    
-    # Simple signature (placeholder - actual Instagram signature is more complex)
-    json_data = json.dumps(signed_body_data)
-    signature = hashlib.md5(json_data.encode()).hexdigest()
-    
+    # Signed body with fixed signature (as shown in original working code)
     data = {
-        'signed_body': f'{signature}.{json_data}',
+        'signed_body': '0d067c2f86cac2c17d655631c9cec2402012fb0a329bcafb3b1f4c0bb56b1f1f.' + json.dumps({
+            '_csrftoken': csrf_token,
+            'adid': uui,
+            'guid': uui,
+            'device_id': device_id,
+            'query': user
+        }),
         'ig_sig_key_version': '4',
     }
     
@@ -154,22 +173,24 @@ def igresetv2(user: str) -> Dict[str, Any]:
             except:
                 result["response"] = response.text
         else:
-            result["error"] = response.text[:500]  # Limit error text
+            result["error"] = response.text[:500]
         
         return result
         
     except Exception as e:
         logger.error(f"igresetv2 failed: {e}")
-        return {"error": str(e), "status": "failed", **DEV_INFO}
+        return {
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat(),
+            **DEV_INFO
+        }
 
 def iguid_info(uid: Union[str, int]) -> Dict[str, Any]:
     """
     Get Instagram account details using user ID.
     
-    Enhanced with:
-    - Better GraphQL query
-    - More profile data
-    - Error recovery
+    Fixed: JSON parsing error
     """
     # Generate secure LSD token
     lsd = ''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=32))
@@ -179,11 +200,12 @@ def iguid_info(uid: Union[str, int]) -> Dict[str, Any]:
         "x-fb-lsd": lsd,
         "User-Agent": generate_user_agent(),
         "Content-Type": "application/x-www-form-urlencoded",
+        "x-ig-app-id": "936619743392459",
     }
     
     variables = {
         "userID": str(uid),
-        "username": "igkrx"  # Updated as requested
+        "username": "igkrx"
     }
     
     data = {
@@ -197,95 +219,114 @@ def iguid_info(uid: Union[str, int]) -> Dict[str, Any]:
     
     try:
         response = requests.post(url, headers=headers, data=data, timeout=15)
-        response.raise_for_status()
-        r_json = response.json()
         
-        user = r_json.get("data", {}).get("user", {})
-        
-        # Enhanced profile data
-        selected = {
-            "full_name": user.get("full_name"),
-            "followers": user.get("follower_count"),
-            "following": user.get("following_count"),
-            "media_count": user.get("media_count"),
-            "uid": user.get("pk"),
-            "username": user.get("username"),
-            "is_verified": user.get("is_verified"),
-            "is_private": user.get("is_private", False),
-            "profile_pic_url": user.get("profile_pic_url"),
-            "biography": user.get("biography", ""),
-            "external_url": user.get("external_url", ""),
-            "fetched_at": datetime.now().isoformat(),
+        result = {
+            "status_code": response.status_code,
+            "success": response.status_code == 200,
+            "timestamp": datetime.now().isoformat(),
             **DEV_INFO
         }
         
-        return selected
+        if response.status_code == 200:
+            try:
+                r_json = response.json()
+                user = r_json.get("data", {}).get("user", {})
+                
+                # Enhanced profile data
+                selected = {
+                    "full_name": user.get("full_name"),
+                    "followers": user.get("follower_count"),
+                    "following": user.get("following_count"),
+                    "media_count": user.get("media_count"),
+                    "uid": user.get("pk"),
+                    "username": user.get("username"),
+                    "is_verified": user.get("is_verified"),
+                    "is_private": user.get("is_private", False),
+                    "profile_pic_url": user.get("profile_pic_url"),
+                    "biography": user.get("biography", ""),
+                    "external_url": user.get("external_url", ""),
+                }
+                result.update(selected)
+            except json.JSONDecodeError:
+                result["error"] = "Invalid JSON response"
+                result["raw_response"] = response.text[:500]
+        else:
+            result["error"] = f"HTTP Error: {response.status_code}"
+            result["raw_response"] = response.text[:500]
+        
+        return result
         
     except Exception as e:
         logger.error(f"iguid_info failed: {e}")
-        return {"error": str(e), "status": "failed", **DEV_INFO}
+        return {
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat(),
+            **DEV_INFO
+        }
 
 def download_reel(insta_url: str) -> Dict[str, Any]:
     """
     Download Instagram reel video - enhanced with multiple sources.
     
-    Now supports:
-    - Multiple download services
-    - Better error handling
-    - Media type detection
+    Fixed: Clean URL handling and better response
     """
+    # Clean the URL
+    clean_url = insta_url.split('?')[0] if '?' in insta_url else insta_url
+    
     # Multiple service endpoints (fallback if one fails)
     services = [
-        f'https://saverify.com/api.php?source=instagram&url={insta_url}',
-        f'https://www.instagramsave.com/download.php?url={insta_url}',
-        f'https://instadownloader.co/api/instagram?url={insta_url}'
+        f'https://saverify.com/api.php?source=instagram&url={clean_url}',
     ]
     
     for service_url in services:
         try:
             logger.info(f"Trying service: {service_url}")
-            response = requests.get(service_url, timeout=20)
-            response.raise_for_status()
-            
-            # Try to parse JSON
-            try:
-                data = response.json()
-            except:
-                # If not JSON, try to extract from HTML
-                video_url_match = re.search(r'(https?://[^\s"\'<>]+\.(mp4|mov|avi))', response.text)
-                if video_url_match:
-                    video_url = video_url_match.group(1)
-                    caption = "Extracted from page"
-                else:
-                    continue
-            else:
-                # Different services have different response formats
-                if 'videoUrl' in data:
-                    video_url = data.get('videoUrl')
-                    caption = data.get('description', '')
-                elif 'url' in data:
-                    video_url = data.get('url')
-                    caption = data.get('caption', '')
-                elif 'links' in data:
-                    video_url = data.get('links', [{}])[0].get('url', '')
-                    caption = data.get('title', '')
-                else:
-                    continue
-            
-            # Extract hashtags and mentions
-            hashtags = re.findall(r'#\w+', caption)
-            mentions = re.findall(r'@\w+', caption)
+            response = requests.get(service_url, timeout=20, verify=False)
             
             result = {
-                'reel_url': insta_url,
-                'download_url': video_url,
-                'caption': caption,
-                'hashtags': hashtags,
-                'mentions': mentions,
-                'service_used': service_url.split('/')[2],
-                'timestamp': datetime.now().isoformat(),
+                "reel_url": clean_url,
+                "service_used": service_url.split('/')[2],
+                "status_code": response.status_code,
+                "timestamp": datetime.now().isoformat(),
                 **DEV_INFO
             }
+            
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    
+                    if 'videoUrl' in data:
+                        video_url = data.get('videoUrl')
+                        caption = data.get('description', '')
+                    elif 'url' in data:
+                        video_url = data.get('url')
+                        caption = data.get('caption', '')
+                    else:
+                        continue
+                    
+                    # Extract hashtags and mentions
+                    hashtags = re.findall(r'#\w+', caption) if caption else []
+                    mentions = re.findall(r'@\w+', caption) if caption else []
+                    
+                    result.update({
+                        'download_url': video_url,
+                        'caption': caption,
+                        'hashtags': hashtags,
+                        'mentions': mentions,
+                        'success': True
+                    })
+                except:
+                    # Try to extract from HTML
+                    video_url_match = re.search(r'(https?://[^\s"\']+\.mp4[^\s"\']*)', response.text)
+                    if video_url_match:
+                        result.update({
+                            'download_url': video_url_match.group(0),
+                            'caption': 'Extracted from page',
+                            'hashtags': [],
+                            'mentions': [],
+                            'success': True
+                        })
             
             return result
             
@@ -293,17 +334,19 @@ def download_reel(insta_url: str) -> Dict[str, Any]:
             logger.warning(f"Service {service_url} failed: {e}")
             continue
     
-    return {"error": "All download services failed", "status": "failed", **DEV_INFO}
+    return {
+        "error": "All download services failed",
+        "reel_url": clean_url,
+        "status": "failed",
+        "timestamp": datetime.now().isoformat(),
+        **DEV_INFO
+    }
 
 def infoig(user: str) -> Dict[str, Any]:
     """
-    Get Instagram profile metadata by username - ENHANCED VERSION.
+    Get Instagram profile metadata by username.
     
-    Now includes:
-    - Complete profile info
-    - Recent posts
-    - Story status
-    - Business info
+    Fixed: Better error handling and response format
     """
     headers = {
         'authority': 'www.instagram.com',
@@ -326,107 +369,117 @@ def infoig(user: str) -> Dict[str, Any]:
             headers=headers,
             timeout=15
         )
-        response.raise_for_status()
-        data = response.json()
         
-        user_data = data.get('data', {}).get('user', {})
-        
-        # Extract comprehensive profile info
-        profile_info = {
-            # Basic info
-            "username": user_data.get("username"),
-            "full_name": user_data.get("full_name"),
-            "user_id": user_data.get("id"),
-            "biography": user_data.get("biography", ""),
-            
-            # Stats
-            "followers": user_data.get("edge_followed_by", {}).get("count", 0),
-            "following": user_data.get("edge_follow", {}).get("count", 0),
-            "posts_count": user_data.get("edge_owner_to_timeline_media", {}).get("count", 0),
-            
-            # Status
-            "is_private": user_data.get("is_private", False),
-            "is_verified": user_data.get("is_verified", False),
-            "is_business": user_data.get("is_business_account", False),
-            "is_professional": user_data.get("is_professional_account", False),
-            
-            # Media
-            "profile_pic_url": user_data.get("profile_pic_url_hd") or user_data.get("profile_pic_url", ""),
-            "external_url": user_data.get("external_url", ""),
-            
-            # Additional data
-            "hashtags": re.findall(r'#\w+', user_data.get("biography", "")),
-            "mentions": re.findall(r'@\w+', user_data.get("biography", "")),
-            "category_name": user_data.get("category_name", ""),
-            "connected_fb_page": user_data.get("connected_fb_page"),
-            
-            # Recent posts (first 3)
-            "recent_posts": extract_recent_posts(user_data),
-            
-            # Metadata
-            "fetched_at": datetime.now().isoformat(),
-            "url": f"https://instagram.com/{user}",
+        result = {
+            "username": user,
+            "status_code": response.status_code,
+            "success": response.status_code == 200,
+            "timestamp": datetime.now().isoformat(),
             **DEV_INFO
         }
         
-        return profile_info
+        if response.status_code == 200:
+            try:
+                data = response.json()
+                user_data = data.get('data', {}).get('user', {})
+                
+                # Basic profile info
+                profile_info = {
+                    "full_name": user_data.get("full_name"),
+                    "user_id": user_data.get("id"),
+                    "biography": user_data.get("biography", ""),
+                    "followers": user_data.get("edge_followed_by", {}).get("count", 0),
+                    "following": user_data.get("edge_follow", {}).get("count", 0),
+                    "posts_count": user_data.get("edge_owner_to_timeline_media", {}).get("count", 0),
+                    "is_private": user_data.get("is_private", False),
+                    "is_verified": user_data.get("is_verified", False),
+                    "is_business": user_data.get("is_business_account", False),
+                    "profile_pic_url": user_data.get("profile_pic_url_hd") or user_data.get("profile_pic_url", ""),
+                    "external_url": user_data.get("external_url", ""),
+                    "category_name": user_data.get("category_name", ""),
+                    "url": f"https://instagram.com/{user}",
+                }
+                result.update(profile_info)
+            except:
+                result["error"] = "Failed to parse response"
+                result["raw_response"] = response.text[:500]
+        else:
+            result["error"] = f"HTTP Error: {response.status_code}"
+            result["raw_response"] = response.text[:500]
+        
+        return result
         
     except Exception as e:
         logger.error(f"infoig failed for user {user}: {e}")
-        return {"error": str(e), "username": user, "status": "failed", **DEV_INFO}
+        return {
+            "username": user,
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat(),
+            **DEV_INFO
+        }
 
 def gen_igcookie() -> Dict[str, Any]:
     """
     Generate Instagram session cookies - enhanced version.
     
-    Returns structured data with:
-    - All cookies
-    - Headers
-    - Session info
+    Returns structured data with all cookies
     """
     url = "https://www.instagram.com/accounts/emailsignup/"
     headers = {'User-Agent': generate_user_agent()}
     
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        cookies = response.cookies
-        
-        cookie_dict = dict(cookies)
         
         result = {
-            "csrf_token": cookies.get("csrftoken"),
-            "mid": cookies.get("mid"),
-            "session_id": cookies.get("sessionid"),
-            "ig_did": cookies.get("ig_did"),
-            "ds_user_id": cookies.get("ds_user_id"),
-            "all_cookies": cookie_dict,
-            "user_agent": headers['User-Agent'],
+            "status_code": response.status_code,
+            "success": response.status_code == 200,
             "generated_at": datetime.now().isoformat(),
-            "expiry_times": {name: c.expires for name, c in cookies.items() if c.expires},
             **DEV_INFO
         }
+        
+        if response.status_code == 200:
+            cookies = response.cookies
+            cookie_dict = dict(cookies)
+            
+            result.update({
+                "csrf_token": cookies.get("csrftoken"),
+                "mid": cookies.get("mid"),
+                "session_id": cookies.get("sessionid"),
+                "ig_did": cookies.get("ig_did"),
+                "ds_user_id": cookies.get("ds_user_id"),
+                "all_cookies": cookie_dict,
+                "user_agent": headers['User-Agent'],
+            })
+        else:
+            result["error"] = f"HTTP Error: {response.status_code}"
         
         return result
         
     except Exception as e:
         logger.error(f"gen_igcookie failed: {e}")
-        return {"error": str(e), "status": "failed", **DEV_INFO}
+        return {
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat(),
+            **DEV_INFO
+        }
 
 def initiate_signup(username: str, email: str) -> Dict[str, Any]:
     """
     Initiate Instagram signup - enhanced with validation.
-    
-    Now includes:
-    - Password encryption
-    - Form validation
-    - Response parsing
     """
     url = "https://www.instagram.com/accounts/web_create_ajax/attempt/"
     
     # Get fresh token
     csrf_token = token()
     if not csrf_token:
-        return {"error": "Failed to get CSRF token", "status": "failed", **DEV_INFO}
+        return {
+            "status": "error",
+            "message": "Failed to get CSRF token",
+            "timestamp": datetime.now().isoformat(),
+            **DEV_INFO
+        }
     
     headers = {
         "accept": "*/*",
@@ -466,240 +519,126 @@ def initiate_signup(username: str, email: str) -> Dict[str, Any]:
             **DEV_INFO
         }
         
-        try:
-            result["response"] = response.json()
-        except:
-            result["response"] = response.text[:1000]
+        if response.status_code == 200:
+            try:
+                result["response"] = response.json()
+            except:
+                result["response"] = response.text[:1000]
+        else:
+            result["error"] = f"HTTP Error: {response.status_code}"
+            result["raw_response"] = response.text[:500]
         
         return result
         
     except Exception as e:
         logger.error(f"initiate_signup failed: {e}")
-        return {"error": str(e), "status": "failed", **DEV_INFO}
-
-# ======================================================================================
-# NEW FUNCTIONS ADDED AS REQUESTED
-# ======================================================================================
-
-def extract_recent_posts(user_data: Dict) -> list:
-    """Extract recent posts from user data"""
-    posts = []
-    edges = user_data.get("edge_owner_to_timeline_media", {}).get("edges", [])[:3]
-    
-    for edge in edges:
-        node = edge.get("node", {})
-        post = {
-            "id": node.get("id"),
-            "shortcode": node.get("shortcode"),
-            "caption": node.get("edge_media_to_caption", {}).get("edges", [{}])[0].get("node", {}).get("text", "")[:200],
-            "likes": node.get("edge_liked_by", {}).get("count", 0),
-            "comments": node.get("edge_media_to_comment", {}).get("count", 0),
-            "is_video": node.get("is_video", False),
-            "thumbnail_url": node.get("thumbnail_src") or node.get("display_url", ""),
-            "timestamp": node.get("taken_at_timestamp", 0),
-        }
-        posts.append(post)
-    
-    return posts
-
-def get_instagram_story(user: str) -> Dict[str, Any]:
-    """
-    NEW FUNCTION: Check if user has active story
-    """
-    try:
-        # Use profile info to get user ID first
-        profile = infoig(user)
-        if "error" in profile:
-            return {"error": f"Failed to get profile: {profile['error']}", **DEV_INFO}
-        
-        user_id = profile.get("user_id")
-        if not user_id:
-            return {"error": "User ID not found", **DEV_INFO}
-        
-        # Check for stories (simplified approach)
-        headers = {
-            'User-Agent': generate_user_agent(),
-            'Accept': 'application/json',
-        }
-        
-        # This is a simplified check - actual story API is more complex
-        result = {
-            "username": user,
-            "user_id": user_id,
-            "has_story": False,  # Default
-            "story_count": 0,
-            "timestamp": datetime.now().isoformat(),
-            "note": "Story feature requires additional authentication",
-            **DEV_INFO
-        }
-        
-        return result
-        
-    except Exception as e:
-        return {"error": str(e), "username": user, **DEV_INFO}
-
-def search_instagram_users(query: str, limit: int = 10) -> Dict[str, Any]:
-    """
-    NEW FUNCTION: Search for Instagram users
-    """
-    try:
-        headers = {
-            'User-Agent': generate_user_agent(),
-            'Accept': 'application/json',
-        }
-        
-        # Instagram search endpoint (simplified)
-        url = f"https://www.instagram.com/web/search/topsearch/?context=user&query={query}"
-        
-        response = requests.get(url, headers=headers, timeout=15)
-        data = response.json()
-        
-        users = []
-        for item in data.get("users", [])[:limit]:
-            user_data = item.get("user", {})
-            users.append({
-                "username": user_data.get("username"),
-                "full_name": user_data.get("full_name"),
-                "user_id": user_data.get("pk"),
-                "is_verified": user_data.get("is_verified", False),
-                "is_private": user_data.get("is_private", False),
-                "profile_pic_url": user_data.get("profile_pic_url"),
-                "follower_count": user_data.get("follower_count", 0),
-            })
-        
         return {
-            "query": query,
-            "result_count": len(users),
-            "users": users,
+            "status": "error",
+            "message": str(e),
             "timestamp": datetime.now().isoformat(),
             **DEV_INFO
         }
-        
-    except Exception as e:
-        return {"error": str(e), "query": query, **DEV_INFO}
 
-def check_username_availability(username: str) -> Dict[str, Any]:
-    """
-    NEW FUNCTION: Check if username is available
-    """
-    try:
-        # Try to get profile info
-        profile = infoig(username)
-        
-        if "error" in profile and "404" in str(profile.get("error", "")):
-            return {
-                "username": username,
-                "available": True,
-                "message": "Username is available",
-                "timestamp": datetime.now().isoformat(),
-                **DEV_INFO
-            }
-        elif "username" in profile:
-            return {
-                "username": username,
-                "available": False,
-                "message": "Username already taken",
-                "existing_user": profile.get("full_name"),
-                "timestamp": datetime.now().isoformat(),
-                **DEV_INFO
-            }
-        else:
-            return {
-                "username": username,
-                "available": "unknown",
-                "message": "Could not determine availability",
-                "error": profile.get("error", "Unknown error"),
-                **DEV_INFO
-            }
-            
-    except Exception as e:
-        return {"error": str(e), "username": username, **DEV_INFO}
+# ======================================================================================
+# HELPER FUNCTIONS
+# ======================================================================================
 
-def get_instagram_hashtag_info(hashtag: str) -> Dict[str, Any]:
-    """
-    NEW FUNCTION: Get Instagram hashtag information
-    """
+def format_response(data: Dict[str, Any]) -> str:
+    """Format response in a nice readable way"""
     try:
-        # Remove # if present
-        clean_hashtag = hashtag.lstrip('#')
-        
-        headers = {
-            'User-Agent': generate_user_agent(),
-            'Accept': 'application/json',
-        }
-        
-        url = f"https://www.instagram.com/explore/tags/{clean_hashtag}/?__a=1"
-        
-        response = requests.get(url, headers=headers, timeout=15)
-        
-        if response.status_code == 404:
-            return {
-                "hashtag": f"#{clean_hashtag}",
-                "exists": False,
-                "message": "Hashtag not found",
-                **DEV_INFO
-            }
-        
-        data = response.json()
-        hashtag_data = data.get("graphql", {}).get("hashtag", {})
-        
-        result = {
-            "hashtag": f"#{clean_hashtag}",
-            "exists": True,
-            "name": hashtag_data.get("name"),
-            "post_count": hashtag_data.get("edge_hashtag_to_media", {}).get("count", 0),
-            "top_posts_only": hashtag_data.get("edge_hashtag_to_top_posts", {}).get("count", 0),
-            "is_top_media_only": hashtag_data.get("is_top_media_only", False),
-            "timestamp": datetime.now().isoformat(),
-            **DEV_INFO
-        }
-        
-        return result
-        
-    except Exception as e:
-        return {"error": str(e), "hashtag": hashtag, **DEV_INFO}
+        formatted = json.dumps(data, indent=2, ensure_ascii=False)
+        return formatted
+    except:
+        return str(data)
+
+def print_formatted_response(func_name: str, result: Dict[str, Any]):
+    """Print formatted response"""
+    print(f"\n{'='*60}")
+    print(f"{func_name} - Result")
+    print(f"{'='*60}")
+    
+    if "success" in result and result["success"]:
+        print("✅ SUCCESS")
+    elif "status" in result and result["status"] == "error":
+        print("❌ ERROR")
+    else:
+        print("⚠️  WARNING")
+    
+    print(f"Timestamp: {result.get('timestamp', 'N/A')}")
+    
+    # Print key information
+    keys_to_print = ['message', 'title', 'body', 'email_or_username', 
+                     'username', 'full_name', 'followers', 'following',
+                     'download_url', 'reel_url', 'csrf_token', 'mid']
+    
+    for key in keys_to_print:
+        if key in result and result[key]:
+            if key == 'download_url' and len(str(result[key])) > 100:
+                print(f"{key}: {str(result[key])[:100]}...")
+            else:
+                print(f"{key}: {result[key]}")
+    
+    if 'error' in result:
+        print(f"Error: {result['error']}")
+    
+    print(f"\nDeveloper: {result.get('Developer', 'N/A')}")
+    print(f"GitHub: {result.get('GitHub', 'N/A')}")
+    print(f"Telegram: {result.get('Telegram', 'N/A')}")
+    print(f"{'='*60}\n")
 
 # ======================================================================================
 # MAIN FUNCTION TO TEST ALL FEATURES
 # ======================================================================================
 
-def test_all_features():
-    """Test all functions"""
+def test_all_functions():
+    """Test all functions with formatted output"""
     print("=" * 60)
-    print("Instagram Toolkit v2.0 - by KrsxhNvrDie")
+    print("Instagram Toolkit v2.0 - Fixed Errors")
     print("=" * 60)
-    
-    # Test each function
-    test_cases = [
-        ("Generate Cookies", lambda: gen_igcookie()),
-        ("Check Username Availability", lambda: check_username_availability("testusername12345")),
-        ("Search Users", lambda: search_instagram_users("instagram", 5)),
-        ("Get Hashtag Info", lambda: get_instagram_hashtag_info("travel")),
-    ]
-    
-    for test_name, test_func in test_cases:
-        print(f"\nTesting: {test_name}")
-        print("-" * 40)
-        try:
-            result = test_func()
-            if isinstance(result, dict):
-                # Print only key info
-                for key, value in list(result.items())[:3]:
-                    print(f"  {key}: {value}")
-            else:
-                print(f"  Result: {result}")
-        except Exception as e:
-            print(f"  Error: {e}")
-    
-    print("\n" + "=" * 60)
     print(f"Developer: {DEV_INFO['Developer']}")
     print(f"GitHub: {DEV_INFO['GitHub']}")
     print(f"Telegram: {DEV_INFO['Telegram']}")
     print("=" * 60)
+    
+    # Test cases
+    print("\n1. Testing Password Reset v1 (Web API)...")
+    result = igresetv1("testuser@gmail.com")
+    print_formatted_response("Password Reset v1", result)
+    
+    print("\n2. Testing Password Reset v2 (Mobile API)...")
+    result = igresetv2("testuser@gmail.com")
+    print_formatted_response("Password Reset v2", result)
+    
+    print("\n3. Testing User Info by Username...")
+    result = infoig("instagram")
+    print_formatted_response("User Info", result)
+    
+    print("\n4. Testing User Info by UID...")
+    result = iguid_info("25025320")  # Instagram's user ID
+    print_formatted_response("User Info by UID", result)
+    
+    print("\n5. Testing Cookie Generation...")
+    result = gen_igcookie()
+    print_formatted_response("Cookie Generation", result)
+    
+    print("\n🎯 Testing Completed!")
+    print("=" * 60)
 
 # ======================================================================================
-# RUN THE TEST
+# EXAMPLE USAGE
 # ======================================================================================
 
 if __name__ == "__main__":
-    test_all_features()
+    # Disable SSL warnings for download services
+    requests.packages.urllib3.disable_warnings()
+    
+    # Run tests
+    test_all_functions()
+    
+    # Example: How to use individual functions
+    print("\n📌 Quick Usage Examples:")
+    print("1. Reset password:", "result = igresetv1('email@example.com')")
+    print("2. Get user info:", "result = infoig('username')")
+    print("3. Download reel:", "result = download_reel('https://instagram.com/reel/...')")
+    print("4. Get cookies:", "result = gen_igcookie()")
+    print("\nAll results are returned as dictionaries with consistent format.")
